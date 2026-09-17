@@ -1,0 +1,19 @@
+# secrets / runtime
+.env
+token.json
+*.db
+*.db-wal
+*.db-shm
+
+# python
+__pycache__/
+*.pyc
+
+# visual studio
+build/
+.vs/
+*.user
+*.aps
+Debug/
+Release/
+x64/

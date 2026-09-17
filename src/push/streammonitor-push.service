@@ -1,0 +1,19 @@
+[Unit]
+Description=StreamMonitor push relay (localhost only, reached via SSH tunnel)
+After=network-online.target streammonitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/streammonitor
+ExecStart=/opt/streammonitor/.venv/bin/python /opt/streammonitor/push.py
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

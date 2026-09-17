@@ -1,0 +1,19 @@
+[Unit]
+Description=CHZZK StreamMonitor daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/streammonitor
+ExecStart=/opt/streammonitor/.venv/bin/python /opt/streammonitor/monitor.py
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

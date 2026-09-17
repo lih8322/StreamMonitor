@@ -1,0 +1,40 @@
+#include "resource.h"
+#include <windows.h>
+#include <afxres.h>
+
+LANGUAGE LANG_KOREAN, SUBLANG_DEFAULT
+#pragma code_page(65001)
+
+IDI_APP ICON "app.ico"
+
+IDD_MAIN DIALOGEX 0, 0, 640, 400
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+CAPTION "StreamMonitor"
+FONT 9, "맑은 고딕", 400, 0, 0x81
+BEGIN
+    CONTROL         "", IDC_CHANNEL_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 7, 7, 180, 350
+    PUSHBUTTON      "채널 새로고침", IDC_BTN_REFRESH, 7, 362, 60, 16
+    DEFPUSHBUTTON   "조회", IDC_BTN_QUERY, 127, 362, 60, 16
+    LTEXT           "", IDC_CHART_TITLE, 195, 7, 438, 12
+    CONTROL         "", IDC_CHART, "Static", SS_OWNERDRAW | SS_NOTIFY, 195, 22, 438, 335
+    LTEXT           "연결 대기 중...", IDC_STATUS, 7, 383, 626, 10
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204B0"
+        BEGIN
+            VALUE "FileDescription", "StreamMonitor MFC client"
+            VALUE "ProductName", "StreamMonitor"
+            VALUE "FileVersion", "0.1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x412, 1200
+    END
+END
