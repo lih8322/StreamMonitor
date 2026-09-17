@@ -6,10 +6,10 @@ SSH 터널로 붙어 차트를 그립니다.
 
 ```
 ┌─ Linux (Oracle Cloud) ───────────────────┐        ┌─ Windows ─────────────────────┐
-│  collector  ── CHZZK Open API 매분 상위 50 │        │  StreamMonitor (MFC)          │
-│      │ SQLite (WAL)                      │  SSH   │   ├ 채널 목록 (7일 최고치 순)  │
-│      ▼                                   │◀─터널─▶│   ├ 2주 차트 (일~토 × 2줄)     │
-│  push  ── 127.0.0.1:9002 줄 단위 JSON      │  9002  │   └ 지난주 회색 오버레이·툴팁  │
+│  collector  ── CHZZK Open API 매분 상위 50 │        │                               │
+│      │ SQLite (WAL)                      │  SSH   │                               │
+│      ▼                                   │◀─터널─▶│  StreamMonitor (MFC)          │
+│  push  ── 127.0.0.1:9002 줄 단위 JSON      │  9002  │                               │
 └──────────────────────────────────────────┘        └───────────────────────────────┘
 ```
 
