@@ -21,3 +21,61 @@
 | **collector** (`monitor.py`) | 서버, systemd `streammonitor` | 매분 치지직 API 를 호출해 상위 50개 방송의 시청자 수를 SQLite 에 기록 | **쓰기 (유일)** |
 | **push** (`push.py`) | 서버, systemd `streammonitor-push` | 클라이언트 요청을 받아 DB 를 읽어 JSON 으로 응답. `127.0.0.1:9002` 에만 바인딩 | 읽기 전용 |
 | **client** (MFC) | 윈도우 PC | SSH 터널을 띄워 push 에 접속, 채널 목록과 2주 시계열을 받아 차트로 표시 | 없음 |
+
+## DB 스키마 (SQLite)
+
+파일 하나(`monitor.db`, WAL 모드)에 테이블 세 개. 쓰기는 collector 만, push 는 `mode=ro` 로 엽니다.
+정의는 [`src/collector/chzzk/schema.sql`](src/collector/chzzk/schema.sql), 비교 쿼리 예시는 [`queries.sql`](src/collector/chzzk/queries.sql).
+
+### `viewer_samples` — 시청자 수 시계열 (매분 상위 50행)
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `channel_id` | TEXT | 치지직 channelId |
+| `ts` | INTEGER | 관측 시각, UTC epoch 초. **60초 단위로 내림** (`now // 60 * 60`) |
+| `viewers` | INTEGER | `concurrentUserCount` |
+
+PK `(channel_id, ts)`, `WITHOUT ROWID`. 보조 인덱스 `ts`.
+`ts` 가 60의 배수라 1주 전 같은 요일·시각은 `ts - 604800` 행 하나와 정확히 매칭됩니다:
+
+```sql
+SELECT a.ts, a.viewers AS now, b.viewers AS last_week
+FROM viewer_samples a
+LEFT JOIN viewer_samples b ON b.channel_id = a.channel_id AND b.ts = a.ts - 7*86400
+WHERE a.channel_id = :channel;
+```
+
+어떤 분에 행이 없으면 "그 분에 상위 50 밖"이라는 뜻이지 방송 종료를 뜻하지 않습니다.
+
+### `stream_info` — 제목/카테고리 변경 이력 (바뀔 때만 1행)
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `channel_id` | TEXT | |
+| `ts` | INTEGER | 이 값이 **적용되기 시작한** 시각 (60초 단위) |
+| `category` | TEXT | `liveCategoryValue` (예: `Grand Theft Auto V`) |
+| `title` | TEXT | `liveTitle` |
+
+PK `(channel_id, ts)`. collector 는 매분 채널별 최신 행과 `(category, title)` 을 비교해 다를 때만 INSERT 합니다.
+시각 T 의 제목은 `channel_id` 가 같고 `ts <= T` 인 행 중 `ts` 가 최대인 것:
+
+```sql
+SELECT category, title FROM stream_info
+WHERE channel_id = :channel AND ts <= :t ORDER BY ts DESC LIMIT 1;
+```
+
+콘텐츠 분석의 기준 단위가 이 행들입니다 — 연속한 두 행 사이가 "한 콘텐츠 구간"이고, 그 구간의 `viewer_samples` 변화가 그 콘텐츠의 효과입니다.
+
+### `channels` — 채널 이름표 (채널당 1행)
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| `channel_id` | TEXT PK | |
+| `channel_name` | TEXT | 최신 이름 (매분 UPSERT 로 덮어씀) |
+| `first_seen_ts` | INTEGER | 처음 상위 50 에 든 시각 |
+| `last_seen_ts` | INTEGER | 마지막으로 상위 50 에 든 시각. 클라이언트의 ●/○ 판정에 사용 |
+
+### 용량과 보존
+
+행당 약 100 B(인덱스 포함). 50행/분이면 하루 7 MB, 30일 약 220 MB. collector 가 매시간 `ts < now - 30일` 인
+`viewer_samples` 와 `stream_info` 행을 삭제합니다 (`stream_info` 는 채널별 최신 1행은 남김). `channels` 는 지우지 않습니다.
