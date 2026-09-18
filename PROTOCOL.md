@@ -18,7 +18,7 @@ market_flow 의 PROTOCOL.md 와 같은 형식 — `type` 으로 종류, `id` 로
 | 메시지 | 예시 | 비고 |
 |---|---|---|
 | hello | `{"type":"hello","v":1,"id":"h1","now":1789673400,"retain_days":30}` | |
-| channels | `{"type":"channels","id":"c1","channels":[{"channel_id":"75cb…","channel_name":"한동숙","first_seen":…,"last_seen":…,"samples":1440,"peak":7595}]}` | `samples`/`peak` = 최근 7일 샘플 수 / 최고 시청자수. `peak` 내림차순. 7일간 샘플 없는 채널은 제외 |
+| channels | `{"type":"channels","id":"c1","channels":[{"channel_id":"75cb…","channel_name":"한동숙","first_seen":…,"last_seen":…,"samples":1440,"peak":7595,"current":5623}]}` | `samples`/`peak` = 최근 7일 샘플 수 / 최고 시청자수, `current` = 마지막 관측(`last_seen`) 시점 시청자수. `peak` 내림차순. 7일간 샘플 없는 채널은 제외 |
 | samples | `{"type":"samples","id":"q1","channel_id":"75cb…","from":…,"to":…,"points":[[1789673400,7595],…],"info":[[1789673400,"메이플스토리","메"],…]}` | `points` = [ts, viewers] 오름차순. `info` = 구간 안 제목/카테고리 변경 이력 (+ 구간 시작 시점의 값 1개) |
 | ping | `{"type":"ping"}` | 30 s. 응답 불필요 |
 | bye | `{"type":"bye"}` | 서버 종료 직전 |

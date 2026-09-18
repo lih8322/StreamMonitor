@@ -31,6 +31,7 @@ protected:
     afx_msg void    OnTimer(UINT_PTR id);
     afx_msg void    OnBnClickedRefresh();
     afx_msg void    OnBnClickedQuery();
+    afx_msg void    OnBnClickedLiveOnly();
     afx_msg void    OnListDblClk(NMHDR* pNMHDR, LRESULT* pResult);
     afx_msg LRESULT OnSmChannels(WPARAM, LPARAM lParam);
     afx_msg LRESULT OnSmSamples(WPARAM, LPARAM lParam);
@@ -52,12 +53,14 @@ private:
     static CString fmt_kst(long long ts, const wchar_t* fmt);
 
     CListCtrl  list_;
+    CButton    chk_live_;
     CImageList icons_;      // 0 = 상위권 밖(회색 ○), 1 = 방송 중·상위권(초록 ●)
     CStatic    status_;
     CStatic    chart_;
     CStatic    chart_title_;
 
-    std::vector<sm::Channel>     channels_;
+    std::vector<sm::Channel>     channels_;   // 서버 순서 그대로
+    std::vector<int>             view_;       // 리스트 행 → channels_ 인덱스 (정렬·필터 적용)
     std::unique_ptr<sm::Samples> samples_;
     CString                      samples_name_;
     long long                    week0_ = 0;   // 지난주 일요일 00:00 KST

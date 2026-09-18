@@ -35,6 +35,7 @@ BEGIN_MESSAGE_MAP(CMainDlg, CDialogEx)
     ON_WM_TIMER()
     ON_BN_CLICKED(IDC_BTN_REFRESH, &CMainDlg::OnBnClickedRefresh)
     ON_BN_CLICKED(IDC_BTN_QUERY,   &CMainDlg::OnBnClickedQuery)
+    ON_BN_CLICKED(IDC_CHK_LIVE,    &CMainDlg::OnBnClickedLiveOnly)
     ON_NOTIFY(NM_DBLCLK, IDC_CHANNEL_LIST, &CMainDlg::OnListDblClk)
     ON_MESSAGE(WM_SM_CHANNELS, &CMainDlg::OnSmChannels)
     ON_MESSAGE(WM_SM_SAMPLES,  &CMainDlg::OnSmSamples)
@@ -48,6 +49,7 @@ CMainDlg::CMainDlg(CWnd* pParent) : CDialogEx(IDD_MAIN, pParent) {
 void CMainDlg::DoDataExchange(CDataExchange* pDX) {
     CDialogEx::DoDataExchange(pDX);
     DDX_Control(pDX, IDC_CHANNEL_LIST, list_);
+    DDX_Control(pDX, IDC_CHK_LIVE,     chk_live_);
     DDX_Control(pDX, IDC_STATUS,       status_);
     DDX_Control(pDX, IDC_CHART,        chart_);
     DDX_Control(pDX, IDC_CHART_TITLE,  chart_title_);
@@ -61,9 +63,10 @@ BOOL CMainDlg::OnInitDialog() {
     list_.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
     make_icons();
     list_.SetImageList(&icons_, LVSIL_SMALL);
-    list_.InsertColumn(0, L"채널", LVCFMT_LEFT, 150);
-    list_.InsertColumn(1, L"최고(7일)", LVCFMT_RIGHT, 65);
-    list_.InsertColumn(2, L"마지막 관측", LVCFMT_LEFT, 95);
+    list_.InsertColumn(0, L"채널", LVCFMT_LEFT, 120);
+    list_.InsertColumn(1, L"현재", LVCFMT_RIGHT, 55);
+    list_.InsertColumn(2, L"최고(7일)", LVCFMT_RIGHT, 62);
+    list_.InsertColumn(3, L"마지막 관측", LVCFMT_LEFT, 90);
 
     // 수신 스레드 콜백 → PostMessage. 포인터 소유권은 메시지 쪽으로 넘긴다.
     client_ = std::make_unique<sm::StreamClient>();
@@ -146,6 +149,7 @@ void CMainDlg::layout(int cx, int cy) {
 
     list_.MoveWindow(kMargin, kMargin, kListWidth, btnTop - kMargin - 6);
     GetDlgItem(IDC_BTN_REFRESH)->MoveWindow(kMargin, btnTop, 100, kBtnH);
+    chk_live_.MoveWindow(kMargin + 108, btnTop + 4, 70, kBtnH - 6);
     GetDlgItem(IDC_BTN_QUERY)->MoveWindow(kMargin + kListWidth - 90, btnTop, 90, kBtnH);
 
     const int chartL = kMargin + kListWidth + kMargin;
@@ -197,8 +201,8 @@ LRESULT CMainDlg::OnSmChannels(WPARAM, LPARAM lParam) {
     std::unique_ptr<std::vector<sm::Channel>> ch(reinterpret_cast<std::vector<sm::Channel>*>(lParam));
     if (!ch) return 0;
     std::wstring selected;
-    if (const int cur = list_.GetNextItem(-1, LVNI_SELECTED); cur >= 0 && cur < static_cast<int>(channels_.size()))
-        selected = channels_[cur].id;
+    if (const int cur = list_.GetNextItem(-1, LVNI_SELECTED); cur >= 0 && cur < static_cast<int>(view_.size()))
+        selected = channels_[view_[cur]].id;
     channels_ = std::move(*ch);
     fill_channels(selected);
 
@@ -212,15 +216,38 @@ LRESULT CMainDlg::OnSmChannels(WPARAM, LPARAM lParam) {
     return 0;
 }
 
-// 삭제 후 재삽입하지 않고 제자리에서 갱신한다 — 스크롤 위치와 선택이 흔들리지 않는다.
+void CMainDlg::OnBnClickedLiveOnly() {
+    std::wstring selected;
+    if (const int cur = list_.GetNextItem(-1, LVNI_SELECTED); cur >= 0 && cur < static_cast<int>(view_.size()))
+        selected = channels_[view_[cur]].id;
+    fill_channels(selected);
+}
+
+// 정렬(현재 시청자수 내림차순)·필터(LIVE만)를 view_ 에 반영하고, 행을 제자리에서 갱신한다
+// — 삭제 후 재삽입하지 않으므로 스크롤 위치와 선택이 흔들리지 않는다.
 void CMainDlg::fill_channels(const std::wstring& keep_selected) {
     const long long now = static_cast<long long>(std::time(nullptr));
-    const int n = static_cast<int>(channels_.size());
+    const bool live_only = chk_live_.GetCheck() == BST_CHECKED;
+    auto is_live = [&](const sm::Channel& c) { return now - c.last_seen <= kLiveWindow; };
+
+    view_.clear();
+    for (int i = 0; i < static_cast<int>(channels_.size()); ++i)
+        if (!live_only || is_live(channels_[i])) view_.push_back(i);
+    // 현재 시청자수 내림차순. 상위권 밖(오프라인)은 0 취급 → 자연히 뒤로. 동률이면 7일 최고치.
+    std::stable_sort(view_.begin(), view_.end(), [&](int a, int b) {
+        const int ca = is_live(channels_[a]) ? channels_[a].current : 0;
+        const int cb = is_live(channels_[b]) ? channels_[b].current : 0;
+        if (ca != cb) return ca > cb;
+        return channels_[a].peak > channels_[b].peak;
+    });
+
+    const int n = static_cast<int>(view_.size());
     list_.SetRedraw(FALSE);
     while (list_.GetItemCount() > n) list_.DeleteItem(list_.GetItemCount() - 1);
     for (int i = 0; i < n; ++i) {
-        const auto& c = channels_[i];
-        const bool live = now - c.last_seen <= kLiveWindow;
+        const auto& c = channels_[view_[i]];
+        const bool live = is_live(c);
+        CString cur;  cur.Format(L"%d", live ? c.current : 0);
         CString peak; peak.Format(L"%d", c.peak);
         const CString seen = live ? L"LIVE" : fmt_kst(c.last_seen, L"%m-%d %H:%M");
         if (i >= list_.GetItemCount()) {
@@ -231,8 +258,9 @@ void CMainDlg::fill_channels(const std::wstring& keep_selected) {
             it.pszText = const_cast<wchar_t*>(c.name.c_str()); it.iImage = live ? 1 : 0;
             list_.SetItem(&it);
         }
-        list_.SetItemText(i, 1, peak);
-        list_.SetItemText(i, 2, seen);
+        list_.SetItemText(i, 1, cur);
+        list_.SetItemText(i, 2, peak);
+        list_.SetItemText(i, 3, seen);
         const bool sel = !keep_selected.empty() && c.id == keep_selected;
         list_.SetItemState(i, sel ? (LVIS_SELECTED | LVIS_FOCUSED) : 0, LVIS_SELECTED | LVIS_FOCUSED);
     }
@@ -248,11 +276,11 @@ void CMainDlg::OnListDblClk(NMHDR*, LRESULT* pResult) {
 
 void CMainDlg::OnBnClickedQuery() {
     const int cur = list_.GetNextItem(-1, LVNI_SELECTED);
-    if (cur < 0 || cur >= static_cast<int>(channels_.size())) {
+    if (cur < 0 || cur >= static_cast<int>(view_.size())) {
         status_.SetWindowTextW(L"채널을 선택하세요");
         return;
     }
-    const auto& c = channels_[cur];
+    const auto& c = channels_[view_[cur]];
     // 이번 주(일~토) + 지난 주 = 지난주 일요일 00:00 KST 부터 지금까지
     const long long now  = static_cast<long long>(std::time(nullptr));
     const long long from = week_start_kst(now) - kWeek;

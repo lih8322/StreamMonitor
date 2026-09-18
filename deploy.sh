@@ -14,7 +14,8 @@ deploy_cpp() {
     ssh "$HOST" "set -e; cd $DEST/cpp
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
         cmake --build build -j2 2>&1 | grep -E 'warning|error|Built target' || true
-        cp build/sm_collector build/sm_push $DEST/bin/
+        # 실행 중인 바이너리는 덮어쓸 수 없으니(ETXTBSY) 새 파일로 쓰고 rename 으로 교체
+        for b in sm_collector sm_push; do cp build/\$b $DEST/bin/\$b.new && mv -f $DEST/bin/\$b.new $DEST/bin/\$b; done
         sudo cp systemd/streammonitor.service systemd/streammonitor-push.service /etc/systemd/system/
         sudo systemctl daemon-reload
         sudo systemctl restart streammonitor streammonitor-push

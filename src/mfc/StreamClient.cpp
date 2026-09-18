@@ -221,6 +221,7 @@ void StreamClient::handle_line(const std::string& line) {
                 ch.last_seen  = json_i64(c, "last_seen");
                 ch.samples    = static_cast<int>(json_i64(c, "samples"));
                 ch.peak       = static_cast<int>(json_i64(c, "peak"));
+                ch.current    = static_cast<int>(json_i64(c, "current"));
                 if (!ch.id.empty()) out->push_back(std::move(ch));
             }
         }

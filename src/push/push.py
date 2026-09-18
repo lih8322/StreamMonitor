@@ -62,13 +62,14 @@ class Db:
         since = int(time.time()) - 7 * 86400
         rows = self.conn.execute("""
             SELECT c.channel_id, c.channel_name, c.first_seen_ts, c.last_seen_ts,
-                   COUNT(s.ts) AS samples, MAX(s.viewers) AS peak
+                   COUNT(s.ts) AS samples, MAX(s.viewers) AS peak,
+                   (SELECT viewers FROM viewer_samples v WHERE v.channel_id = c.channel_id AND v.ts = c.last_seen_ts) AS current
             FROM channels c JOIN viewer_samples s ON s.channel_id = c.channel_id AND s.ts >= ?
             GROUP BY c.channel_id
             ORDER BY peak DESC, c.last_seen_ts DESC""", (since,)).fetchall()
         return [{"channel_id": r["channel_id"], "channel_name": r["channel_name"],
                  "first_seen": r["first_seen_ts"], "last_seen": r["last_seen_ts"],
-                 "samples": r["samples"], "peak": r["peak"]} for r in rows]
+                 "samples": r["samples"], "peak": r["peak"], "current": r["current"] or 0} for r in rows]
 
     def samples(self, channel_id: str, t_from: int, t_to: int) -> dict:
         pts = self.conn.execute(

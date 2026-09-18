@@ -23,6 +23,7 @@ struct Channel {
     long long    last_seen  = 0;
     int          samples    = 0;
     int          peak       = 0;   // 최근 7일 최고 시청자수
+    int          current    = 0;   // 마지막 관측 시청자수
 };
 
 struct Point { long long ts = 0; int viewers = 0; };

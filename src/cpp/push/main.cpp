@@ -46,7 +46,8 @@ public:
     explicit Queries(const std::string& path) {
         db_.open(path, SQLITE_OPEN_READONLY);
         channels_ = std::make_unique<sm::Stmt>(db_,
-            "SELECT c.channel_id, c.channel_name, c.first_seen_ts, c.last_seen_ts, COUNT(s.ts), MAX(s.viewers) "
+            "SELECT c.channel_id, c.channel_name, c.first_seen_ts, c.last_seen_ts, COUNT(s.ts), MAX(s.viewers), "
+            "       (SELECT viewers FROM viewer_samples v WHERE v.channel_id = c.channel_id AND v.ts = c.last_seen_ts) "
             "FROM channels c JOIN viewer_samples s ON s.channel_id = c.channel_id AND s.ts >= ? "
             "GROUP BY c.channel_id ORDER BY MAX(s.viewers) DESC, c.last_seen_ts DESC");
         points_ = std::make_unique<sm::Stmt>(db_,
@@ -74,6 +75,7 @@ public:
             w.Key("last_seen");    w.Int64(channels_->col_i64(3));
             w.Key("samples");      w.Int64(channels_->col_i64(4));
             w.Key("peak");         w.Int64(channels_->col_i64(5));
+            w.Key("current");      w.Int64(channels_->col_null(6) ? 0 : channels_->col_i64(6));   // 마지막 관측 시청자수
             w.EndObject();
         }
         channels_->reset();
