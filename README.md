@@ -18,9 +18,12 @@
 
 | 프로세스 | 어디서 | 역할 | DB 접근 |
 |---|---|---|---|
-| **collector** (`monitor.py`) | 서버, systemd `streammonitor` | 매분 치지직 API 를 호출해 상위 50개 방송의 시청자 수를 SQLite 에 기록 | **쓰기 (유일)** |
-| **push** (`push.py`) | 서버, systemd `streammonitor-push` | 클라이언트 요청을 받아 DB 를 읽어 JSON 으로 응답. `127.0.0.1:9002` 에만 바인딩 | 읽기 전용 |
+| **collector** (`sm_collector`, C++) | 서버, systemd `streammonitor` | 매분 치지직 API 를 호출해 상위 50개 방송의 시청자 수를 SQLite 에 기록 | **쓰기 (유일)** |
+| **push** (`sm_push`, C++) | 서버, systemd `streammonitor-push` | 클라이언트 요청을 받아 DB 를 읽어 JSON 으로 응답. `127.0.0.1:9002` 에만 바인딩 | 읽기 전용 |
 | **client** (MFC) | 윈도우 PC | SSH 터널을 띄워 push 에 접속, 채널 목록과 2주 시계열을 받아 차트로 표시 | 없음 |
+
+서버 데몬은 `src/cpp/` 의 C++ 판이 운영 중이고, `src/collector/`·`src/push/` 의 Python 판은 같은 동작을 하는
+참조 구현으로 남겨 둡니다 (로컬 테스트, 롤백용). 빌드·배포는 `./deploy.sh cpp`.
 
 ## DB 스키마 (SQLite)
 

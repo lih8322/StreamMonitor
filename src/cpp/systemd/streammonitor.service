@@ -1,0 +1,19 @@
+[Unit]
+Description=StreamMonitor collector (CHZZK top-N viewers -> SQLite, C++)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/streammonitor
+ExecStart=/opt/streammonitor/bin/sm_collector
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

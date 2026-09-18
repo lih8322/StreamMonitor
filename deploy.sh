@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
 # 서버(/opt/streammonitor)로 배포하고 데몬을 재시작한다.
-#   ./deploy.sh collector   # monitor.py + chzzk/ → streammonitor 재시작
-#   ./deploy.sh push        # push.py → streammonitor-push 재시작
-#   ./deploy.sh all
+#   ./deploy.sh cpp         # src/cpp 를 서버에서 빌드 → bin/ 설치 → 두 데몬 재시작 (운영)
+#   ./deploy.sh collector   # Python 판 monitor.py + chzzk/ 복사 (예비)
+#   ./deploy.sh push        # Python 판 push.py 복사 (예비)
 set -euo pipefail
 HOST=${SM_HOST:-oracle}
 DEST=${SM_DEST:-/opt/streammonitor}
 cd "$(dirname "$0")"
 
-deploy_collector() {
+deploy_cpp() {
+    ssh "$HOST" "mkdir -p $DEST/cpp $DEST/bin"
+    scp -o BatchMode=yes -r src/cpp/CMakeLists.txt src/cpp/common src/cpp/collector src/cpp/push src/cpp/systemd "$HOST:$DEST/cpp/"
+    ssh "$HOST" "set -e; cd $DEST/cpp
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
+        cmake --build build -j2 2>&1 | grep -E 'warning|error|Built target' || true
+        cp build/sm_collector build/sm_push $DEST/bin/
+        sudo cp systemd/streammonitor.service systemd/streammonitor-push.service /etc/systemd/system/
+        sudo systemctl daemon-reload
+        sudo systemctl restart streammonitor streammonitor-push
+        sleep 3; systemctl is-active streammonitor streammonitor-push"
+}
+deploy_collector_py() {
     scp -o BatchMode=yes src/collector/monitor.py src/collector/test_auth.py src/collector/test_lives.py \
-        src/collector/requirements.txt src/collector/streammonitor.service "$HOST:$DEST/"
+        src/collector/requirements.txt "$HOST:$DEST/"
     scp -o BatchMode=yes -r src/collector/chzzk "$HOST:$DEST/"
-    ssh "$HOST" "sudo systemctl restart streammonitor && sleep 2 && systemctl is-active streammonitor"
 }
-deploy_push() {
-    scp -o BatchMode=yes src/push/push.py src/push/streammonitor-push.service "$HOST:$DEST/"
-    ssh "$HOST" "sudo systemctl restart streammonitor-push && sleep 1 && systemctl is-active streammonitor-push"
+deploy_push_py() {
+    scp -o BatchMode=yes src/push/push.py "$HOST:$DEST/"
 }
-case "${1:-all}" in
-    collector) deploy_collector ;;
-    push)      deploy_push ;;
-    all)       deploy_collector; deploy_push ;;
-    *) echo "usage: $0 {collector|push|all}"; exit 1 ;;
+case "${1:-cpp}" in
+    cpp)       deploy_cpp ;;
+    collector) deploy_collector_py ;;
+    push)      deploy_push_py ;;
+    *) echo "usage: $0 {cpp|collector|push}"; exit 1 ;;
 esac
