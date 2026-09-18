@@ -555,37 +555,67 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         bool found = false;
         const int band = std::clamp(static_cast<int>((y - plot.top) * 3 / std::max<LONG>(1, plot.Height())), 0, 2);
         const int stepH = kLabelH + kGap;
+        bool strict = true;   // true: 리더 라인이 선을 가로지르는 후보 제외. 방향마다 strict → 완화 순으로 2번 시도
         auto try_cand = [&](int lx, int ly) {
             const CRect cand(lx, ly, lx + w, ly + kLabelH);
             if (!inside(cand) || hits_label(cand) || hits_line(cand)) return false;
-            const int ax = static_cast<int>(lx >= x ? cand.left : cand.right);
-            const int leader_y = static_cast<int>(band == 2 ? cand.top - 1 : cand.bottom + 1);   // 아래쪽 라벨은 윗변으로 연결
-            if (leader_crosses(x, ax, leader_y)) return false;
+            if (strict) {
+                const int ax = static_cast<int>(lx >= x ? cand.left : cand.right);
+                const int leader_y = static_cast<int>(cand.top > y ? cand.top - 1 : cand.bottom + 1);
+                if (leader_crosses(x, ax, leader_y)) return false;
+            }
             box = cand; found = true; return true;
         };
-        const int dxs[] = {10, -w - 10, 30, -w - 30, 60, -w - 60, 100, -w - 100, 150, -w - 150, 220, -w - 220};
-        // 옆: 라벨 세로 중심을 점에 맞추고 좌우로. 안 되면 반 단계씩 위·아래로 벗어난다
+        // 옆: 라벨 세로 중심을 점에 맞추고, 가까운 순으로 좌우로 플롯 끝까지 훑는다. 안 되면 반 단계씩 위·아래로 벗어난다
         auto try_side = [&]() {
             for (int v = 0; v <= 4 && !found; ++v)
-                for (int sgn : {-1, +1}) {
-                    if (v == 0 && sgn > 0) continue;
-                    const int ly = y - kLabelH / 2 + sgn * v * (stepH / 2);
-                    for (int dx : dxs) if (try_cand(x + dx, ly)) break;
+                for (int sgn_v : {-1, +1}) {
+                    if (v == 0 && sgn_v > 0) continue;
+                    const int ly = y - kLabelH / 2 + sgn_v * v * (stepH / 2);
+                    for (int off = 0; off <= W && !found; off += 6)
+                        for (int sgn : {+1, -1}) {
+                            const int lx = sgn > 0 ? x + 10 + off : x - 10 - off - w;
+                            if (try_cand(lx, ly)) break;
+                        }
                     if (found) break;
                 }
         };
-        // 위(dir=-1)/아래(dir=+1): 한 단계씩 멀어지며
+        // 위(dir=-1)/아래(dir=+1): 플롯의 맨 위(아래) 줄부터 점 쪽으로 내려오며(올라가며), 각 줄에서는
+        // 점의 x 에 가까운 순으로. 라벨이 상단(하단) 띠에 가로로 나란히 모이고 리더는 세로로 길게 뻗는다.
         auto try_vertical = [&](int dir) {
-            for (int step = 1; step <= 40 && !found; ++step) {
-                const int ly = dir < 0 ? y - step * stepH - kLabelH + stepH : y + step * stepH - stepH + kGap;
-                if (ly + kLabelH < plot.top || ly > plot.bottom) break;
-                for (int dx : dxs) if (try_cand(x + dx, ly)) break;
+            const int top_ly = static_cast<int>(plot.top) + 2, bot_ly = static_cast<int>(plot.bottom) - 2 - kLabelH;
+            const int near_ly = dir < 0 ? y - kGap - kLabelH : y + kGap;     // 점에 가장 가까운 줄
+            for (int ly = dir < 0 ? top_ly : bot_ly; !found; ly += (dir < 0 ? 6 : -6)) {
+                if (dir < 0 ? ly > near_ly : ly < near_ly) break;
+                for (int off = 0; off <= W && !found; off += 6)
+                    for (int sgn : {+1, -1}) {
+                        if (off == 0 && sgn < 0) continue;
+                        const int lx = sgn > 0 ? x + 10 + off : x - 10 - off - w;
+                        if (try_cand(lx, ly)) break;
+                    }
             }
         };
-        // 띠별 우선순위. 첫 방향에 자리가 없으면(예: 바닥에 붙은 점은 아래가 없음) 다음 방향으로.
-        if      (band == 0) { try_vertical(-1); if (!found) try_side(); if (!found) try_vertical(+1); }
-        else if (band == 1) { try_side();       if (!found) try_vertical(-1); if (!found) try_vertical(+1); }
-        else                { try_vertical(+1); if (!found) try_side(); if (!found) try_vertical(-1); }
+        // 방향 하나를 strict(리더 교차 금지) → 완화 순으로 시도
+        auto try_dir = [&](int dir) {   // dir: -1 위, 0 옆, +1 아래
+            for (bool st : {true, false}) {
+                strict = st;
+                if (dir == 0) try_side(); else try_vertical(dir);
+                if (found) return;
+            }
+        };
+        // 띠별 우선순위. 상단은 위로, 중앙은 옆으로, 하단은 아래로. 그 방향에 정말 자리가 없을 때만 다음 방향.
+        if      (band == 0) { try_dir(-1); if (!found) try_dir(0);  if (!found) try_dir(+1); }
+        else if (band == 1) { try_dir(0);  if (!found) try_dir(-1); if (!found) try_dir(+1); }
+        else                { try_dir(+1); if (!found) try_dir(0);  if (!found) try_dir(-1); }
+#ifdef SM_ANNOT_DEBUG
+        {
+            wchar_t dbg[256];
+            ::swprintf_s(dbg, L"[annot] ts=%lld x=%d y=%d band=%d plot=(%d,%d,%d,%d) w=%d found=%d box=(%d,%d)\n",
+                         inf.ts, x, y, band, (int)plot.left, (int)plot.top, (int)plot.right, (int)plot.bottom, w, found ? 1 : 0, (int)box.left, (int)box.top);
+            FILE* f = nullptr; _wfopen_s(&f, LR"(C:\Users\lih83\AppData\Local\Temp\sm_annot.log)", L"a, ccs=UTF-8");
+            if (f) { fputws(dbg, f); fclose(f); }
+        }
+#endif
         if (!found) {
             // 점 주변에 자리가 없으면 x 에서 가까운 순으로 플롯 전체를 훑는다 (선은 무시, 라벨끼리만 회피)
             const int rows = static_cast<int>((plot.Height() - 4) / (kLabelH + kGap));
