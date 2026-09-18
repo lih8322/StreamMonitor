@@ -546,27 +546,52 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         const CString cat(inf.category.c_str()), title(inf.title.c_str());
         const int w = std::min<int>(std::max(dc.GetTextExtent(cat).cx, dc.GetTextExtent(title).cx) + 6, kMaxLabelW);
 
-        // 후보 위치: 점에서 위·아래로 한 단계(kLabelH+kGap)씩 번갈아 멀어지며, 각 단계에서
-        // 오른쪽 → 왼쪽 → 더 오른쪽 → 더 왼쪽. 기존 라벨·데이터 선·플롯 경계와 겹치지 않는 첫 자리.
+        // 후보 위치 — 점이 플롯의 어느 띠에 있느냐로 방향을 정한다.
+        //   상단 1/3: 위로 올라가며 (plot.top 위의 날짜 라벨은 inside() 가 막는다)
+        //   중앙 1/3: 같은 높이에서 좌우로 멀어지며 (막히면 반 단계씩 위아래)
+        //   하단 1/3: 아래로 내려가며 (plot.bottom 아래의 시각 라벨은 inside() 가 막는다)
+        // 각 후보는 기존 라벨·데이터 선·플롯 경계·리더 라인 교차를 모두 피해야 한다.
         CRect box;
         bool found = false;
-        for (int step = 1; step <= 40 && !found; ++step) {
-            for (int dir : {-1, +1}) {
-                const int ly = y + dir * step * (kLabelH + kGap) - (dir < 0 ? kLabelH : 0);
-                const int dxs[] = {10, -w - 10, 30, -w - 30, 60, -w - 60, 100, -w - 100, 150, -w - 150, 220, -w - 220};
-                for (int dx : dxs) {
-                    const CRect cand(x + dx, ly, x + dx + w, ly + kLabelH);
-                    if (!inside(cand) || hits_label(cand) || hits_line(cand)) continue;
-                    const int ax = static_cast<int>(dx > 0 ? cand.left : cand.right);
-                    if (leader_crosses(x, ax, static_cast<int>(cand.bottom) + 1)) continue;
-                    box = cand; found = true; break;
+        const int band = std::clamp(static_cast<int>((y - plot.top) * 3 / std::max<LONG>(1, plot.Height())), 0, 2);
+        const int stepH = kLabelH + kGap;
+        auto try_cand = [&](int lx, int ly) {
+            const CRect cand(lx, ly, lx + w, ly + kLabelH);
+            if (!inside(cand) || hits_label(cand) || hits_line(cand)) return false;
+            const int ax = static_cast<int>(lx >= x ? cand.left : cand.right);
+            const int leader_y = static_cast<int>(band == 2 ? cand.top - 1 : cand.bottom + 1);   // 아래쪽 라벨은 윗변으로 연결
+            if (leader_crosses(x, ax, leader_y)) return false;
+            box = cand; found = true; return true;
+        };
+        const int dxs[] = {10, -w - 10, 30, -w - 30, 60, -w - 60, 100, -w - 100, 150, -w - 150, 220, -w - 220};
+        // 옆: 라벨 세로 중심을 점에 맞추고 좌우로. 안 되면 반 단계씩 위·아래로 벗어난다
+        auto try_side = [&]() {
+            for (int v = 0; v <= 4 && !found; ++v)
+                for (int sgn : {-1, +1}) {
+                    if (v == 0 && sgn > 0) continue;
+                    const int ly = y - kLabelH / 2 + sgn * v * (stepH / 2);
+                    for (int dx : dxs) if (try_cand(x + dx, ly)) break;
+                    if (found) break;
                 }
-                if (found) break;
+        };
+        // 위(dir=-1)/아래(dir=+1): 한 단계씩 멀어지며
+        auto try_vertical = [&](int dir) {
+            for (int step = 1; step <= 40 && !found; ++step) {
+                const int ly = dir < 0 ? y - step * stepH - kLabelH + stepH : y + step * stepH - stepH + kGap;
+                if (ly + kLabelH < plot.top || ly > plot.bottom) break;
+                for (int dx : dxs) if (try_cand(x + dx, ly)) break;
             }
-        }
+        };
+        // 띠별 우선순위. 첫 방향에 자리가 없으면(예: 바닥에 붙은 점은 아래가 없음) 다음 방향으로.
+        if      (band == 0) { try_vertical(-1); if (!found) try_side(); if (!found) try_vertical(+1); }
+        else if (band == 1) { try_side();       if (!found) try_vertical(-1); if (!found) try_vertical(+1); }
+        else                { try_vertical(+1); if (!found) try_side(); if (!found) try_vertical(-1); }
         if (!found) {
             // 점 주변에 자리가 없으면 x 에서 가까운 순으로 플롯 전체를 훑는다 (선은 무시, 라벨끼리만 회피)
-            for (int ly = plot.top + 2; ly + kLabelH <= plot.bottom && !found; ly += kLabelH + kGap)
+            const int rows = static_cast<int>((plot.Height() - 4) / (kLabelH + kGap));
+            for (int r = 0; r < rows && !found; ++r) {
+                const int ly = band == 2 ? static_cast<int>(plot.bottom - 2 - (r + 1) * (kLabelH + kGap) + kGap)
+                                         : static_cast<int>(plot.top + 2 + r * (kLabelH + kGap));
                 for (int off = 0; off <= W && !found; off += 8)
                     for (int sgn : {+1, -1}) {
                         const int lx = x + sgn * off - (sgn < 0 ? w : 0);
@@ -574,6 +599,7 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
                         if (!inside(cand) || hits_label(cand)) continue;
                         box = cand; found = true; break;
                     }
+            }
         }
         if (!found) {   // 정말 자리가 없으면 마커만
             dc.Ellipse(x - 2, y - 2, x + 3, y + 3);
@@ -581,11 +607,12 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         }
         placed.push_back(box);
 
-        // 리더 라인: 점 → 라벨의 가까운 아래 모서리 (ㄴ/ㄱ 자)
+        // 리더 라인: 점 → 라벨의 가까운 모서리 (ㄴ/ㄱ 자). 라벨이 점 아래면 윗변, 아니면 아랫변으로
         const int ax = static_cast<int>(std::abs(x - box.left) <= std::abs(x - box.right) ? box.left : box.right);
+        const int ey = static_cast<int>(box.top > y ? box.top - 1 : box.bottom + 1);
         dc.MoveTo(x, y);
-        dc.LineTo(x, box.bottom + 1);
-        if (ax != x) dc.LineTo(ax, box.bottom + 1);
+        dc.LineTo(x, ey);
+        if (ax != x) dc.LineTo(ax, ey);
         dc.Ellipse(x - 2, y - 2, x + 3, y + 3);
 
         dc.FillSolidRect(box, RGB(255, 248, 235));
