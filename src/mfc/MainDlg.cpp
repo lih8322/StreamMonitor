@@ -499,10 +499,23 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         col_bot[cx] = std::max(col_bot[cx], cy);
     }
     // 라벨 사각형이 선과 겹치는지: 그 x 구간의 어느 열에서든 선의 y 구간과 라벨의 y 구간이 만나면 겹침
+    constexpr int kHGap = 8;   // 선과 라벨 사이 가로 여유
     auto hits_line = [&](const CRect& r) {
-        const int x0 = std::max(0, static_cast<int>(r.left - plot.left)), x1 = std::min(W, static_cast<int>(r.right - plot.left));
+        const int x0 = std::max(0, static_cast<int>(r.left - plot.left) - kHGap);
+        const int x1 = std::min(W, static_cast<int>(r.right - plot.left) + kHGap);
         for (int x = x0; x <= x1; ++x)
             if (col_top[x] != INT_MAX && col_top[x] <= r.bottom + kGap && col_bot[x] >= r.top - kGap) return true;
+        return false;
+    };
+    // 리더 라인의 가로 구간(y=ly, x 에서 라벨 모서리까지)이 선을 가로지르는지. 점 바로 옆 몇 px 는 제외.
+    auto leader_crosses = [&](int px, int ax, int ly) {
+        const int lo = std::min(px, ax), hi = std::max(px, ax);
+        for (int x = lo; x <= hi; ++x) {
+            if (std::abs(x - px) <= 3) continue;
+            const int cx = x - plot.left;
+            if (cx < 0 || cx > W || col_top[cx] == INT_MAX) continue;
+            if (col_top[cx] <= ly + 1 && col_bot[cx] >= ly - 1) return true;
+        }
         return false;
     };
     std::vector<CRect> placed;
@@ -540,10 +553,12 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         for (int step = 1; step <= 40 && !found; ++step) {
             for (int dir : {-1, +1}) {
                 const int ly = y + dir * step * (kLabelH + kGap) - (dir < 0 ? kLabelH : 0);
-                const int dxs[] = {6, -w - 6, 40, -w - 40, 90, -w - 90};
+                const int dxs[] = {10, -w - 10, 30, -w - 30, 60, -w - 60, 100, -w - 100, 150, -w - 150, 220, -w - 220};
                 for (int dx : dxs) {
                     const CRect cand(x + dx, ly, x + dx + w, ly + kLabelH);
                     if (!inside(cand) || hits_label(cand) || hits_line(cand)) continue;
+                    const int ax = static_cast<int>(dx > 0 ? cand.left : cand.right);
+                    if (leader_crosses(x, ax, static_cast<int>(cand.bottom) + 1)) continue;
                     box = cand; found = true; break;
                 }
                 if (found) break;
