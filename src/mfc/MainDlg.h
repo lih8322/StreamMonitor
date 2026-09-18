@@ -79,7 +79,8 @@ private:
     // 상위 14 당일 모드: 요청한 채널(id, name) 순서와 채널별 응답
     static constexpr int kMultiCount = 10;
     std::vector<std::pair<std::wstring, std::wstring>> multi_ids_;
-    std::map<std::wstring, std::unique_ptr<sm::Samples>> multi_;
+    std::map<std::wstring, std::unique_ptr<sm::Samples>> multi_;        // 최근 24h
+    std::map<std::wstring, std::unique_ptr<sm::Samples>> multi_prev_;   // 1주 전 같은 24h (회색 비교선)
     long long multi_from_ = 0;                      // 24시간 창의 시작 (now - 24h, 분 단위 정렬)
     std::vector<CRect> multi_rows_;                 // 그리기 시 각 줄의 plot 영역 (툴팁용)
     int  hover_multi_ = -1;                         // 툴팁 대상 줄

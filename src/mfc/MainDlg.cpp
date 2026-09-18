@@ -306,12 +306,16 @@ void CMainDlg::request_multi() {
     for (int i = 0; i < static_cast<int>(view_.size()) && i < kMultiCount; ++i)
         multi_ids_.emplace_back(channels_[view_[i]].id, channels_[view_[i]].name);
     // 목록에서 빠진 채널의 이전 응답은 버린다
-    for (auto it = multi_.begin(); it != multi_.end();) {
-        bool keep = false;
-        for (const auto& [id, name] : multi_ids_) if (id == it->first) { keep = true; break; }
-        it = keep ? std::next(it) : multi_.erase(it);
+    for (auto* m : {&multi_, &multi_prev_})
+        for (auto it = m->begin(); it != m->end();) {
+            bool keep = false;
+            for (const auto& [id, name] : multi_ids_) if (id == it->first) { keep = true; break; }
+            it = keep ? std::next(it) : m->erase(it);
+        }
+    for (const auto& [id, name] : multi_ids_) {
+        client_->request_samples(id, multi_from_, multi_from_ + 86400);                   // 최근 24h
+        client_->request_samples(id, multi_from_ - kWeek, multi_from_ - kWeek + 86400);   // 1주 전 같은 24h
     }
-    for (const auto& [id, name] : multi_ids_) client_->request_samples(id, multi_from_, multi_from_ + 86400);
     CString st; st.Format(L"상위 %d 채널 24시간 데이터 조회 중...", static_cast<int>(multi_ids_.size()));
     status_.SetWindowTextW(st);
 }
@@ -344,11 +348,12 @@ LRESULT CMainDlg::OnSmSamples(WPARAM, LPARAM lParam) {
     if (!s) return 0;
     // 상위 10 최근 24h 모드의 응답(구간 길이 24h): 요청 목록에 있는 채널이면 채널별 저장
     if (s->to - s->from == 86400 && multi_from_ != 0) {
+        const bool prev = std::llabs(s->from - (multi_from_ - kWeek)) < 300;   // 1주 전 창 응답
         for (const auto& [id, name] : multi_ids_)
             if (id == s->channel_id) {
-                multi_[id] = std::move(s);
+                (prev ? multi_prev_ : multi_)[id] = std::move(s);
                 if (mode() == kModeMulti) {
-                    CString st; st.Format(L"24h %d/%d 수신  %s", static_cast<int>(multi_.size()), static_cast<int>(multi_ids_.size()),
+                    CString st; st.Format(L"24h %d/%d (지난주 %d) 수신  %s", static_cast<int>(multi_.size()), static_cast<int>(multi_ids_.size()), static_cast<int>(multi_prev_.size()),
                                           fmt_kst(static_cast<long long>(std::time(nullptr)), L"%H:%M:%S").GetString());
                     status_.SetWindowTextW(st);
                     chart_.Invalidate();
@@ -725,9 +730,12 @@ void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
 
         auto it = multi_.find(id);
         const sm::Samples* smp = it == multi_.end() ? nullptr : it->second.get();
-        int peak = 0, cur = 0;
+        auto itp = multi_prev_.find(id);
+        const sm::Samples* prv = itp == multi_prev_.end() ? nullptr : itp->second.get();
+        int peak = 0, cur = 0, prev_peak = 0;
         if (smp) for (const auto& p : smp->points) { peak = std::max(peak, p.viewers); cur = p.viewers; }
-        const int ymax = std::max(1, peak);
+        if (prv) for (const auto& p : prv->points) prev_peak = std::max(prev_peak, p.viewers);
+        const int ymax = std::max(1, std::max(peak, prev_peak));   // 두 선을 같은 눈금으로
         auto Y = [&](int v) { return plot.bottom - static_cast<int>(static_cast<long long>(v) * plot.Height() / ymax); };
 
         // 채널명 (왼쪽), 현재/최고 (오른쪽)
@@ -738,6 +746,20 @@ void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
         CString stat;
         if (smp) stat.Format(L"%d\n최고 %d", cur, peak); else stat = L"...";
         dc.DrawText(stat, CRect(row.right + 4, row.top, rc.right, row.bottom), DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+
+        // 1주 전 같은 시간대: +7일 옮겨 회색으로 먼저 (같은 y 눈금)
+        if (prv && !prv->points.empty()) {
+            CPen gray(PS_SOLID, 1, RGB(175, 175, 175));
+            dc.SelectObject(&gray);
+            bool pen_down = false; long long prev_ts = 0;
+            for (const auto& p : prv->points) {
+                const long long ts = p.ts + kWeek;
+                const int x = X(ts), y = Y(p.viewers);
+                if (!pen_down || ts - prev_ts > 2 * kPollSec) { dc.MoveTo(x, y); pen_down = true; } else dc.LineTo(x, y);
+                prev_ts = ts;
+            }
+            dc.SelectObject(&sep);
+        }
         if (!smp || smp->points.empty()) continue;
 
         // 제목 변경 눈금 (구간 시작 값 제외: ts < t_from)
@@ -766,6 +788,8 @@ void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
             const auto& p = smp.points[hover_idx_];
             const CRect& plot = multi_rows_[hover_multi_];
             int peak = 0; for (const auto& q : smp.points) peak = std::max(peak, q.viewers);
+            if (auto ip = multi_prev_.find(multi_ids_[hover_multi_].first); ip != multi_prev_.end())
+                for (const auto& q : ip->second->points) peak = std::max(peak, q.viewers);
             const int x = X(p.ts);
             const int y = plot.bottom - static_cast<int>(static_cast<long long>(p.viewers) * plot.Height() / std::max(1, peak));
             CPen cross(PS_SOLID, 1, RGB(80, 80, 80));
