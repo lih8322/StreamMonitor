@@ -486,20 +486,23 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
     auto X = [&](long long ts) { return plot.left + static_cast<int>((ts - t0) * static_cast<long long>(plot.Width()) / kWeek); };
     auto Y = [&](int v) { return plot.bottom - static_cast<int>(static_cast<long long>(v) * plot.Height() / ymax); };
 
-    constexpr int kLabelH = 15, kMaxLabelW = 220, kGap = 3;
+    constexpr int kLineH = 14, kLabelH = 2 * kLineH + 2, kMaxLabelW = 220, kGap = 3;   // 두 줄: 카테고리 / 타이틀
 
-    // 데이터 선을 피하기 위해 x 열마다 선의 최고 y(가장 위) 를 구해 둔다. 없으면 plot.bottom.
+    // 데이터 선을 피하기 위해 x 열마다 선이 차지하는 y 구간 [col_top, col_bot] 을 구해 둔다.
     const int W = std::max(1, plot.Width());
-    std::vector<int> col_top(static_cast<size_t>(W) + 1, plot.bottom);
+    std::vector<int> col_top(static_cast<size_t>(W) + 1, INT_MAX), col_bot(static_cast<size_t>(W) + 1, INT_MIN);
     for (const auto& pt : samples_->points) {
         if (pt.ts < t0 || pt.ts >= t1) continue;
         const int cx = X(pt.ts) - plot.left, cy = Y(pt.viewers);
-        if (cx >= 0 && cx <= W) col_top[cx] = std::min(col_top[cx], cy);
+        if (cx < 0 || cx > W) continue;
+        col_top[cx] = std::min(col_top[cx], cy);
+        col_bot[cx] = std::max(col_bot[cx], cy);
     }
-    // 라벨 사각형이 선과 겹치는지: 그 x 구간에서 선의 최고점이 라벨 아래쪽보다 위에 있으면 겹침
+    // 라벨 사각형이 선과 겹치는지: 그 x 구간의 어느 열에서든 선의 y 구간과 라벨의 y 구간이 만나면 겹침
     auto hits_line = [&](const CRect& r) {
         const int x0 = std::max(0, static_cast<int>(r.left - plot.left)), x1 = std::min(W, static_cast<int>(r.right - plot.left));
-        for (int x = x0; x <= x1; ++x) if (col_top[x] <= r.bottom + kGap) return true;
+        for (int x = x0; x <= x1; ++x)
+            if (col_top[x] != INT_MAX && col_top[x] <= r.bottom + kGap && col_bot[x] >= r.top - kGap) return true;
         return false;
     };
     std::vector<CRect> placed;
@@ -510,7 +513,7 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         }
         return false;
     };
-    auto inside = [&](const CRect& r) { return r.left >= plot.left && r.right <= plot.right && r.top >= plot.top; };
+    auto inside = [&](const CRect& r) { return r.left >= plot.left && r.right <= plot.right && r.top >= plot.top && r.bottom <= plot.bottom; };
 
     CPen leader(PS_SOLID, 1, RGB(200, 120, 60));
     CPen* oldPen = dc.SelectObject(&leader);
@@ -527,31 +530,35 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
                                    [](const sm::Point& p, long long t) { return p.ts < t; });
         if (it != samples_->points.end() && it->ts < t1) y = Y(it->viewers);
 
-        CString text;
-        text.Format(L"%s | %s", inf.category.c_str(), inf.title.c_str());
-        const int w = std::min<int>(dc.GetTextExtent(text).cx + 6, kMaxLabelW);
+        const CString cat(inf.category.c_str()), title(inf.title.c_str());
+        const int w = std::min<int>(std::max(dc.GetTextExtent(cat).cx, dc.GetTextExtent(title).cx) + 6, kMaxLabelW);
 
-        // 후보 위치: 점 위쪽부터 한 단계(kLabelH+kGap)씩 올라가며, 각 단계에서 오른쪽 → 왼쪽 → 조금 더 오른쪽/왼쪽.
-        // 기존 라벨·데이터 선·플롯 경계와 겹치지 않는 첫 자리를 쓴다.
+        // 후보 위치: 점에서 위·아래로 한 단계(kLabelH+kGap)씩 번갈아 멀어지며, 각 단계에서
+        // 오른쪽 → 왼쪽 → 더 오른쪽 → 더 왼쪽. 기존 라벨·데이터 선·플롯 경계와 겹치지 않는 첫 자리.
         CRect box;
         bool found = false;
         for (int step = 1; step <= 40 && !found; ++step) {
-            const int ly = y - step * (kLabelH + kGap);
-            if (ly < plot.top) break;
-            const int dxs[] = {6, -w - 6, 40, -w - 40, 90, -w - 90};
-            for (int dx : dxs) {
-                const CRect cand(x + dx, ly, x + dx + w, ly + kLabelH);
-                if (!inside(cand) || hits_label(cand) || hits_line(cand)) continue;
-                box = cand; found = true; break;
+            for (int dir : {-1, +1}) {
+                const int ly = y + dir * step * (kLabelH + kGap) - (dir < 0 ? kLabelH : 0);
+                const int dxs[] = {6, -w - 6, 40, -w - 40, 90, -w - 90};
+                for (int dx : dxs) {
+                    const CRect cand(x + dx, ly, x + dx + w, ly + kLabelH);
+                    if (!inside(cand) || hits_label(cand) || hits_line(cand)) continue;
+                    box = cand; found = true; break;
+                }
+                if (found) break;
             }
         }
         if (!found) {
-            // 점 위 공간이 없으면 플롯 상단 빈 자리를 왼쪽부터 훑는다 (선은 무시, 라벨끼리만 회피)
+            // 점 주변에 자리가 없으면 x 에서 가까운 순으로 플롯 전체를 훑는다 (선은 무시, 라벨끼리만 회피)
             for (int ly = plot.top + 2; ly + kLabelH <= plot.bottom && !found; ly += kLabelH + kGap)
-                for (int lx = plot.left; lx + w <= plot.right && !found; lx += 8) {
-                    const CRect cand(lx, ly, lx + w, ly + kLabelH);
-                    if (!hits_label(cand)) { box = cand; found = true; }
-                }
+                for (int off = 0; off <= W && !found; off += 8)
+                    for (int sgn : {+1, -1}) {
+                        const int lx = x + sgn * off - (sgn < 0 ? w : 0);
+                        const CRect cand(lx, ly, lx + w, ly + kLabelH);
+                        if (!inside(cand) || hits_label(cand)) continue;
+                        box = cand; found = true; break;
+                    }
         }
         if (!found) {   // 정말 자리가 없으면 마커만
             dc.Ellipse(x - 2, y - 2, x + 3, y + 3);
@@ -567,7 +574,11 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         dc.Ellipse(x - 2, y - 2, x + 3, y + 3);
 
         dc.FillSolidRect(box, RGB(255, 248, 235));
-        dc.DrawText(text, CRect(box.left + 3, box.top, box.right - 3, box.bottom),
+        dc.SetTextColor(RGB(120, 60, 20));
+        dc.DrawText(cat, CRect(box.left + 3, box.top + 1, box.right - 3, box.top + 1 + kLineH),
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        dc.SetTextColor(RGB(60, 60, 60));
+        dc.DrawText(title, CRect(box.left + 3, box.top + 1 + kLineH, box.right - 3, box.bottom - 1),
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     dc.SelectObject(oldPen);
