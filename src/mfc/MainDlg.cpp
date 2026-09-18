@@ -37,6 +37,7 @@ BEGIN_MESSAGE_MAP(CMainDlg, CDialogEx)
     ON_BN_CLICKED(IDC_BTN_REFRESH, &CMainDlg::OnBnClickedRefresh)
     ON_BN_CLICKED(IDC_BTN_QUERY,   &CMainDlg::OnBnClickedQuery)
     ON_BN_CLICKED(IDC_CHK_LIVE,    &CMainDlg::OnBnClickedLiveOnly)
+    ON_CBN_SELCHANGE(IDC_MODE,     &CMainDlg::OnCbnSelchangeMode)
     ON_NOTIFY(NM_DBLCLK, IDC_CHANNEL_LIST, &CMainDlg::OnListDblClk)
     ON_MESSAGE(WM_SM_CHANNELS, &CMainDlg::OnSmChannels)
     ON_MESSAGE(WM_SM_SAMPLES,  &CMainDlg::OnSmSamples)
@@ -51,6 +52,7 @@ void CMainDlg::DoDataExchange(CDataExchange* pDX) {
     CDialogEx::DoDataExchange(pDX);
     DDX_Control(pDX, IDC_CHANNEL_LIST, list_);
     DDX_Control(pDX, IDC_CHK_LIVE,     chk_live_);
+    DDX_Control(pDX, IDC_MODE,         mode_);
     DDX_Control(pDX, IDC_STATUS,       status_);
     DDX_Control(pDX, IDC_CHART,        chart_);
     DDX_Control(pDX, IDC_CHART_TITLE,  chart_title_);
@@ -63,6 +65,9 @@ BOOL CMainDlg::OnInitDialog() {
 
     list_.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
     make_icons();
+    mode_.AddString(L"채널 2주 분석");
+    mode_.AddString(L"상위 14 당일");
+    mode_.SetCurSel(kModeSingle);
     list_.SetImageList(&icons_, LVSIL_SMALL);
     list_.InsertColumn(0, L"채널", LVCFMT_LEFT, 120);
     list_.InsertColumn(1, L"현재", LVCFMT_RIGHT, 55);
@@ -154,7 +159,8 @@ void CMainDlg::layout(int cx, int cy) {
     GetDlgItem(IDC_BTN_QUERY)->MoveWindow(kMargin + kListWidth - 90, btnTop, 90, kBtnH);
 
     const int chartL = kMargin + kListWidth + kMargin;
-    chart_title_.MoveWindow(chartL, kMargin, cx - chartL - kMargin, 18);
+    mode_.MoveWindow(chartL, kMargin - 2, 130, 200);
+    chart_title_.MoveWindow(chartL + 138, kMargin, cx - chartL - 138 - kMargin, 18);
     chart_.MoveWindow(chartL, kMargin + 22, cx - chartL - kMargin, bottom - kMargin - 22 - 4);
     status_.MoveWindow(kMargin, bottom + 2, cx - 2 * kMargin, statusH);
     chart_.Invalidate();
@@ -183,8 +189,9 @@ void CMainDlg::make_icons() {
 void CMainDlg::OnTimer(UINT_PTR id) {
     if (id == kRefreshTimer && client_ && client_->connected()) {
         client_->request_channels();
+        if (mode() == kModeMulti) { if (!multi_ids_.empty()) request_multi(); }
         // 조회 중인 채널이 있으면 차트도 같은 구간으로 다시 받는다 (주가 바뀌면 자동으로 새 주 기준)
-        if (!samples_id_.empty()) {
+        else if (!samples_id_.empty()) {
             const long long now = static_cast<long long>(std::time(nullptr));
             week0_ = week_start_kst(now) - kWeek;
             client_->request_samples(samples_id_, week0_, now);
@@ -275,7 +282,42 @@ void CMainDlg::OnListDblClk(NMHDR*, LRESULT* pResult) {
     *pResult = 0;
 }
 
+CMainDlg::Mode CMainDlg::mode() const {
+    return mode_.GetSafeHwnd() && mode_.GetCurSel() == kModeMulti ? kModeMulti : kModeSingle;
+}
+
+void CMainDlg::OnCbnSelchangeMode() {
+    hover_idx_ = -1; hover_multi_ = -1;
+    if (mode() == kModeMulti) {
+        if (multi_ids_.empty()) request_multi();
+        chart_title_.SetWindowTextW(L"상위 14 채널 — 오늘 (00:00 KST 부터)");
+    } else if (samples_) {
+        OnBnClickedQuery();   // 단일 모드로 돌아오면 선택 채널을 다시 조회
+    }
+    chart_.Invalidate();
+}
+
+// 리스트(정렬·필터 적용) 앞 kMultiCount 개 채널의 오늘 데이터를 요청한다
+void CMainDlg::request_multi() {
+    if (!client_ || !client_->connected()) { status_.SetWindowTextW(L"연결되지 않음"); return; }
+    const long long now = static_cast<long long>(std::time(nullptr));
+    day0_ = (now + kKstOffset) / 86400 * 86400 - kKstOffset;   // 오늘 00:00 KST
+    multi_ids_.clear();
+    for (int i = 0; i < static_cast<int>(view_.size()) && i < kMultiCount; ++i)
+        multi_ids_.emplace_back(channels_[view_[i]].id, channels_[view_[i]].name);
+    // 목록에서 빠진 채널의 이전 응답은 버린다
+    for (auto it = multi_.begin(); it != multi_.end();) {
+        bool keep = false;
+        for (const auto& [id, name] : multi_ids_) if (id == it->first) { keep = true; break; }
+        it = keep ? std::next(it) : multi_.erase(it);
+    }
+    for (const auto& [id, name] : multi_ids_) client_->request_samples(id, day0_, now);
+    CString st; st.Format(L"상위 %d 채널 오늘 데이터 조회 중...", static_cast<int>(multi_ids_.size()));
+    status_.SetWindowTextW(st);
+}
+
 void CMainDlg::OnBnClickedQuery() {
+    if (mode() == kModeMulti) { request_multi(); return; }
     const int cur = list_.GetNextItem(-1, LVNI_SELECTED);
     if (cur < 0 || cur >= static_cast<int>(view_.size())) {
         status_.SetWindowTextW(L"채널을 선택하세요");
@@ -300,6 +342,20 @@ void CMainDlg::OnBnClickedQuery() {
 LRESULT CMainDlg::OnSmSamples(WPARAM, LPARAM lParam) {
     std::unique_ptr<sm::Samples> s(reinterpret_cast<sm::Samples*>(lParam));
     if (!s) return 0;
+    // 상위 14 당일 모드의 응답: 요청 목록에 있는 채널이면 채널별 저장
+    if (s->from == day0_ && day0_ != 0) {
+        for (const auto& [id, name] : multi_ids_)
+            if (id == s->channel_id) {
+                multi_[id] = std::move(s);
+                if (mode() == kModeMulti) {
+                    CString st; st.Format(L"당일 %d/%d 수신  %s", static_cast<int>(multi_.size()), static_cast<int>(multi_ids_.size()),
+                                          fmt_kst(static_cast<long long>(std::time(nullptr)), L"%H:%M:%S").GetString());
+                    status_.SetWindowTextW(st);
+                    chart_.Invalidate();
+                }
+                return 0;
+            }
+    }
     if (s->channel_id != samples_id_) return 0;   // 늦게 도착한 이전 채널 응답은 버린다
     samples_ = std::move(s);
     hover_idx_ = -1;
@@ -366,6 +422,8 @@ void CMainDlg::draw_chart(CDC& dc, const CRect& rc) {
     font.CreatePointFont(85, L"맑은 고딕");
     CFont* oldFont = dc.SelectObject(&font);
     dc.SetBkMode(TRANSPARENT);
+
+    if (mode() == kModeMulti) { draw_multi(dc, rc); dc.SelectObject(oldFont); return; }
 
     if (!samples_ || samples_->points.empty()) {
         dc.SetTextColor(RGB(120, 120, 120));
@@ -612,6 +670,126 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, const CRect& data, l
     dc.SelectObject(oldPen);
 }
 
+// ── 상위 14 당일 모드 ─────────────────────────────────────────────────────
+// 채널당 한 줄. x 축은 오늘 00:00 ~ 24:00 KST 공통, y 축은 줄마다 자기 최고치.
+// 왼쪽에 채널명·현재/최고, 선 위에 제목 변경 지점(주황 눈금). 툴팁은 줄 안에서 동작.
+void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
+    multi_rows_.clear();
+    if (multi_ids_.empty()) {
+        dc.SetTextColor(RGB(120, 120, 120));
+        CRect r(rc);
+        dc.DrawText(L"조회를 누르면 리스트 상위 14개 채널의 오늘 데이터를 나열합니다", -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+    const int n = static_cast<int>(multi_ids_.size());
+    const int nameW = 150, rightW = 60, axisH = 18, top = rc.top + 4;
+    const int rowH = std::max(24, static_cast<int>(rc.bottom - axisH - top) / n);
+    const CRect axis(rc.left + nameW, top, rc.right - rightW, top + rowH * n);
+    auto X = [&](long long ts) { return axis.left + static_cast<int>((ts - day0_) * static_cast<long long>(axis.Width()) / 86400); };
+
+    CPen grid(PS_SOLID, 1, RGB(232, 232, 232));
+    CPen sep(PS_SOLID, 1, RGB(210, 210, 210));
+    CPen line(PS_SOLID, 2, RGB(46, 139, 87));
+    CPen mark(PS_SOLID, 1, RGB(200, 120, 60));
+    CPen nowpen(PS_DOT, 1, RGB(150, 150, 150));
+    CPen* oldPen = dc.SelectObject(&grid);
+
+    // 시각 격자 + 라벨 (2시간)
+    dc.SetTextColor(RGB(90, 90, 90));
+    for (int h = 0; h <= 24; h += 2) {
+        const int x = X(day0_ + h * 3600LL);
+        dc.MoveTo(x, axis.top); dc.LineTo(x, axis.bottom);
+        CString s; s.Format(L"%02d", h % 24);
+        dc.DrawText(s, CRect(x - 14, axis.bottom + 2, x + 14, axis.bottom + 16), DT_CENTER | DT_SINGLELINE);
+    }
+    // 현재 시각
+    const long long now = static_cast<long long>(std::time(nullptr));
+    dc.SelectObject(&nowpen);
+    { const int x = X(std::min(now, day0_ + 86400)); dc.MoveTo(x, axis.top); dc.LineTo(x, axis.bottom); }
+
+    for (int i = 0; i < n; ++i) {
+        const auto& [id, name] = multi_ids_[i];
+        const CRect row(axis.left, top + i * rowH, axis.right, top + (i + 1) * rowH);
+        const CRect plot(row.left, row.top + 3, row.right, row.bottom - 3);
+        multi_rows_.push_back(plot);
+        dc.SelectObject(&sep);
+        dc.MoveTo(rc.left, row.bottom); dc.LineTo(rc.right, row.bottom);
+
+        auto it = multi_.find(id);
+        const sm::Samples* smp = it == multi_.end() ? nullptr : it->second.get();
+        int peak = 0, cur = 0;
+        if (smp) for (const auto& p : smp->points) { peak = std::max(peak, p.viewers); cur = p.viewers; }
+        const int ymax = std::max(1, peak);
+        auto Y = [&](int v) { return plot.bottom - static_cast<int>(static_cast<long long>(v) * plot.Height() / ymax); };
+
+        // 채널명 (왼쪽), 현재/최고 (오른쪽)
+        dc.SetTextColor(RGB(30, 30, 30));
+        CString label; label.Format(L"%d. %s", i + 1, name.c_str());
+        dc.DrawText(label, CRect(rc.left + 4, row.top, row.left - 6, row.bottom), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        dc.SetTextColor(RGB(90, 90, 90));
+        CString stat;
+        if (smp) stat.Format(L"%d\n최고 %d", cur, peak); else stat = L"...";
+        dc.DrawText(stat, CRect(row.right + 4, row.top, rc.right, row.bottom), DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+        if (!smp || smp->points.empty()) continue;
+
+        // 제목 변경 눈금 (구간 시작 값 제외: ts < day0_)
+        dc.SelectObject(&mark);
+        for (const auto& inf : smp->info) {
+            if (inf.ts < day0_) continue;
+            const int x = X(inf.ts);
+            dc.MoveTo(x, plot.top); dc.LineTo(x, plot.bottom);
+        }
+        // 선
+        dc.SelectObject(&line);
+        bool pen_down = false; long long prev = 0;
+        for (const auto& p : smp->points) {
+            const int x = X(p.ts), y = Y(p.viewers);
+            if (!pen_down || p.ts - prev > 2 * kPollSec) { dc.MoveTo(x, y); pen_down = true; } else dc.LineTo(x, y);
+            prev = p.ts;
+        }
+    }
+    dc.SelectObject(oldPen);
+
+    // 툴팁
+    if (hover_multi_ >= 0 && hover_multi_ < n && hover_idx_ >= 0) {
+        auto it = multi_.find(multi_ids_[hover_multi_].first);
+        if (it != multi_.end() && hover_idx_ < static_cast<int>(it->second->points.size())) {
+            const auto& smp = *it->second;
+            const auto& p = smp.points[hover_idx_];
+            const CRect& plot = multi_rows_[hover_multi_];
+            int peak = 0; for (const auto& q : smp.points) peak = std::max(peak, q.viewers);
+            const int x = X(p.ts);
+            const int y = plot.bottom - static_cast<int>(static_cast<long long>(p.viewers) * plot.Height() / std::max(1, peak));
+            CPen cross(PS_SOLID, 1, RGB(80, 80, 80));
+            CPen* op = dc.SelectObject(&cross);
+            dc.MoveTo(x, axis.top); dc.LineTo(x, axis.bottom);
+            CBrush dot(RGB(46, 139, 87)); CBrush* ob = dc.SelectObject(&dot);
+            dc.Ellipse(x - 3, y - 3, x + 4, y + 4);
+            const sm::Info* curinf = nullptr;
+            for (const auto& inf : smp.info) if (inf.ts <= p.ts) curinf = &inf;
+            CString l1, l2;
+            l1.Format(L"%s  %s   %d명", multi_ids_[hover_multi_].second.c_str(), fmt_kst(p.ts, L"%H:%M").GetString(), p.viewers);
+            if (curinf) l2.Format(L"%s | %s", curinf->category.c_str(), curinf->title.c_str());
+            const CSize s1 = dc.GetTextExtent(l1), s2 = l2.IsEmpty() ? CSize(0, 0) : dc.GetTextExtent(l2);
+            const int w = std::min<int>(std::max(s1.cx, s2.cx) + 12, 360), h = s1.cy + s2.cy + 8;
+            int bx = x + 12, by = y - h - 6;
+            if (bx + w > rc.right) bx = x - 12 - w;
+            if (by < rc.top) by = y + 10;
+            if (by + h > rc.bottom) by = rc.bottom - h;
+            CRect box(bx, by, bx + w, by + h);
+            dc.FillSolidRect(box, RGB(255, 255, 225));
+            dc.Draw3dRect(box, RGB(120, 120, 120), RGB(120, 120, 120));
+            dc.SetTextColor(RGB(0, 0, 0));
+            dc.DrawText(l1, CRect(box.left + 6, box.top + 4, box.right - 6, box.top + 4 + s1.cy), DT_LEFT | DT_SINGLELINE);
+            if (!l2.IsEmpty()) {
+                dc.SetTextColor(RGB(90, 90, 90));
+                dc.DrawText(l2, CRect(box.left + 6, box.top + 4 + s1.cy, box.right - 6, box.bottom - 4), DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
+            dc.SelectObject(ob); dc.SelectObject(op);
+        }
+    }
+}
+
 // ── 툴팁 ──────────────────────────────────────────────────────────────────
 BOOL CMainDlg::PreTranslateMessage(MSG* pMsg) {
     if (chart_.GetSafeHwnd() && pMsg->hwnd == chart_.GetSafeHwnd()) {
@@ -632,6 +810,30 @@ BOOL CMainDlg::PreTranslateMessage(MSG* pMsg) {
 
 void CMainDlg::update_hover(CPoint pt) {
     int idx = -1, row = 0;
+    if (mode() == kModeMulti) {
+        int mrow = -1;
+        for (int i = 0; i < static_cast<int>(multi_rows_.size()); ++i)
+            if (multi_rows_[i].PtInRect(pt)) { mrow = i; break; }
+        if (mrow >= 0 && mrow < static_cast<int>(multi_ids_.size())) {
+            auto it = multi_.find(multi_ids_[mrow].first);
+            if (it != multi_.end() && !it->second->points.empty()) {
+                const CRect& plot = multi_rows_[mrow];
+                const long long ts = day0_ + static_cast<long long>(pt.x - plot.left) * 86400 / std::max(1, static_cast<int>(plot.Width()));
+                const auto& pts = it->second->points;
+                auto lb = std::lower_bound(pts.begin(), pts.end(), ts, [](const sm::Point& p, long long t) { return p.ts < t; });
+                long long best = LLONG_MAX; int bi = -1;
+                for (auto c : {lb, lb == pts.begin() ? pts.end() : std::prev(lb)}) {
+                    if (c == pts.end()) continue;
+                    const long long d = std::llabs(c->ts - ts);
+                    if (d < best) { best = d; bi = static_cast<int>(c - pts.begin()); }
+                }
+                const long long sec_per_px = 86400 / std::max(1, static_cast<int>(plot.Width()));
+                if (bi >= 0 && best <= 12 * sec_per_px) idx = bi;
+            }
+        }
+        if (idx != hover_idx_ || mrow != hover_multi_) { hover_idx_ = idx; hover_multi_ = mrow; chart_.Invalidate(); }
+        return;
+    }
     if (samples_ && !samples_->points.empty()) {
         for (int r = 0; r < 2; ++r) {
             const CRect& plot = row_rect_[r];

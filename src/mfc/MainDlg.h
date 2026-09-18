@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "resource.h"
 #include "StreamClient.h"
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -32,6 +33,7 @@ protected:
     afx_msg void    OnBnClickedRefresh();
     afx_msg void    OnBnClickedQuery();
     afx_msg void    OnBnClickedLiveOnly();
+    afx_msg void    OnCbnSelchangeMode();
     afx_msg void    OnListDblClk(NMHDR* pNMHDR, LRESULT* pResult);
     afx_msg LRESULT OnSmChannels(WPARAM, LPARAM lParam);
     afx_msg LRESULT OnSmSamples(WPARAM, LPARAM lParam);
@@ -50,11 +52,17 @@ private:
     void draw_annotations(CDC& dc, const CRect& plot, const CRect& data, long long week_start, int ymax);
     int  label_rows_for(long long week_start) const;   // 그 주의 제목 변경 수에 따른 라벨 전용 줄 수 (0/1/2)
     void draw_hover(CDC& dc);
+    // 상위 14 당일 모드
+    enum Mode { kModeSingle = 0, kModeMulti = 1 };
+    Mode mode() const;
+    void request_multi();                            // view_ 앞 14개의 오늘 데이터 요청
+    void draw_multi(CDC& dc, const CRect& rc);
     void update_hover(CPoint pt);                    // pt: 차트 컨트롤 클라이언트 좌표
     static long long week_start_kst(long long ts);   // ts 가 속한 주의 일요일 00:00 KST (epoch)
     static CString fmt_kst(long long ts, const wchar_t* fmt);
 
     CListCtrl  list_;
+    CComboBox  mode_;
     CButton    chk_live_;
     CImageList icons_;      // 0 = 상위권 밖(회색 ○), 1 = 방송 중·상위권(초록 ●)
     CStatic    status_;
@@ -67,6 +75,14 @@ private:
     CString                      samples_name_;
     long long                    week0_ = 0;   // 지난주 일요일 00:00 KST
     std::wstring                 samples_id_;  // 마지막 조회 채널 (1분 갱신용)
+
+    // 상위 14 당일 모드: 요청한 채널(id, name) 순서와 채널별 응답
+    static constexpr int kMultiCount = 14;
+    std::vector<std::pair<std::wstring, std::wstring>> multi_ids_;
+    std::map<std::wstring, std::unique_ptr<sm::Samples>> multi_;
+    long long day0_ = 0;                            // 오늘 00:00 KST
+    std::vector<CRect> multi_rows_;                 // 그리기 시 각 줄의 plot 영역 (툴팁용)
+    int  hover_multi_ = -1;                         // 툴팁 대상 줄
 
     // 마지막 그리기의 두 줄 영역 (툴팁 좌표 변환용)
     CRect     row_rect_[2];     // 각 줄의 데이터 영역 (툴팁 좌표 변환용)

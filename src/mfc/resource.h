@@ -10,3 +10,4 @@
 #define IDC_CHART           1006
 #define IDC_CHART_TITLE     1007
 #define IDC_CHK_LIVE        1008
+#define IDC_MODE            1009
