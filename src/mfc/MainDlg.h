@@ -46,7 +46,9 @@ private:
     void make_icons();
     void draw_chart(CDC& dc, const CRect& rc);
     void draw_week(CDC& dc, const CRect& plot, long long week_start, int ymax, int ystep, int row);
-    void draw_annotations(CDC& dc, const CRect& plot, long long week_start, int ymax);
+    // plot = 라벨까지 쓸 수 있는 전체 영역, data = 선이 그려지는 영역 (위·아래 라벨 전용 띠를 뺀 것)
+    void draw_annotations(CDC& dc, const CRect& plot, const CRect& data, long long week_start, int ymax);
+    int  label_rows_for(long long week_start) const;   // 그 주의 제목 변경 수에 따른 라벨 전용 줄 수 (0/1/2)
     void draw_hover(CDC& dc);
     void update_hover(CPoint pt);                    // pt: 차트 컨트롤 클라이언트 좌표
     static long long week_start_kst(long long ts);   // ts 가 속한 주의 일요일 00:00 KST (epoch)
@@ -67,7 +69,7 @@ private:
     std::wstring                 samples_id_;  // 마지막 조회 채널 (1분 갱신용)
 
     // 마지막 그리기의 두 줄 영역 (툴팁 좌표 변환용)
-    CRect     row_rect_[2];
+    CRect     row_rect_[2];     // 각 줄의 데이터 영역 (툴팁 좌표 변환용)
     int       ymax_ = 1;
     // 마우스 위치의 샘플. hover_idx_ < 0 이면 없음
     int       hover_idx_ = -1;

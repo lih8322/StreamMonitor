@@ -392,10 +392,8 @@ found:
     if (right - left < 10 || rowH < 10) { dc.SelectObject(oldFont); return; }
 
     ymax_ = ymax;
-    row_rect_[0] = CRect(left, top, right, top + rowH);
-    row_rect_[1] = CRect(left, top + rowH + gap, right, bottom);
-    draw_week(dc, row_rect_[0], week0_, ymax, step, 0);
-    draw_week(dc, row_rect_[1], week0_ + kWeek, ymax, step, 1);
+    draw_week(dc, CRect(left, top, right, top + rowH), week0_, ymax, step, 0);
+    draw_week(dc, CRect(left, top + rowH + gap, right, bottom), week0_ + kWeek, ymax, step, 1);
     draw_hover(dc);
 
     // 현재 제목 (마지막 info) — 차트 상단 왼쪽
@@ -409,10 +407,24 @@ found:
 }
 
 // 한 주(일요일 00:00 ~ 토요일 24:00 KST)를 plot 에 그린다.
+int CMainDlg::label_rows_for(long long week_start) const {
+    if (!samples_) return 0;
+    int n = 0;
+    for (const auto& inf : samples_->info)
+        if (inf.ts >= week_start && inf.ts < week_start + kWeek) ++n;
+    return n == 0 ? 0 : (n > 6 ? 2 : 1);
+}
+
 void CMainDlg::draw_week(CDC& dc, const CRect& plot, long long week_start, int ymax, int ystep, int row) {
     const long long t0 = week_start, t1 = week_start + kWeek;
+    // 위·아래에 라벨 전용 띠를 확보한다. 선은 data 안에만 그려지므로 띠 안의 라벨은 선과 절대 겹치지 않는다.
+    constexpr int kLabelRowH = 2 * 14 + 2 + 3;   // draw_annotations 의 kLabelH + kGap 과 같은 값
+    const int reserve = label_rows_for(week_start) * kLabelRowH;
+    CRect data(plot.left, plot.top + reserve, plot.right, plot.bottom - reserve);
+    if (data.Height() < 40) data = plot;          // 창이 너무 작으면 띠를 포기
+    row_rect_[row] = data;
     auto X = [&](long long ts) { return plot.left + static_cast<int>((ts - t0) * static_cast<long long>(plot.Width()) / kWeek); };
-    auto Y = [&](int v) { return plot.bottom - static_cast<int>(static_cast<long long>(v) * plot.Height() / ymax); };
+    auto Y = [&](int v) { return data.bottom - static_cast<int>(static_cast<long long>(v) * data.Height() / ymax); };
 
     CPen grid(PS_SOLID, 1, RGB(232, 232, 232));
     CPen dayline(PS_SOLID, 1, RGB(150, 150, 150));
@@ -420,7 +432,7 @@ void CMainDlg::draw_week(CDC& dc, const CRect& plot, long long week_start, int y
     CPen* oldPen = dc.SelectObject(&grid);
     dc.SetTextColor(RGB(90, 90, 90));
 
-    // y 눈금
+    // y 눈금 (data 영역 안)
     for (int v = 0; v <= ymax; v += ystep) {
         const int y = Y(v);
         dc.MoveTo(plot.left, y); dc.LineTo(plot.right, y);
@@ -451,6 +463,13 @@ void CMainDlg::draw_week(CDC& dc, const CRect& plot, long long week_start, int y
     }
     dc.SelectObject(&axis);
     dc.MoveTo(plot.left, plot.top); dc.LineTo(plot.left, plot.bottom); dc.LineTo(plot.right, plot.bottom);
+    // 라벨 띠 경계 (아주 연하게)
+    if (reserve > 0) {
+        CPen bandline(PS_DOT, 1, RGB(225, 225, 225));
+        dc.SelectObject(&bandline);
+        dc.MoveTo(plot.left, data.top); dc.LineTo(plot.right, data.top);
+        dc.MoveTo(plot.left, data.bottom); dc.LineTo(plot.right, data.bottom);
+    }
 
     // 선 그리기: shift 만큼 시각을 옮겨서 (지난주를 이번주 칸에 겹칠 때 +1주). 2분 넘게 끊기면 잇지 않는다
     auto draw_line = [&](long long shift) {
@@ -476,15 +495,15 @@ void CMainDlg::draw_week(CDC& dc, const CRect& plot, long long week_start, int y
     draw_line(0);
     dc.SelectObject(oldPen);
 
-    draw_annotations(dc, plot, week_start, ymax);
+    draw_annotations(dc, plot, data, week_start, ymax);
 }
 
 // 제목/카테고리 변경: 변경 시각의 데이터 점에서 직선을 끌어 위쪽 빈 자리에 내용을 적는다.
 // 라벨은 3개 레인(row 상단)에 왼쪽부터 채우고, 겹치면 다음 레인 / 오른쪽으로 민다.
-void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start, int ymax) {
+void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, const CRect& data, long long week_start, int ymax) {
     const long long t0 = week_start, t1 = week_start + kWeek;
     auto X = [&](long long ts) { return plot.left + static_cast<int>((ts - t0) * static_cast<long long>(plot.Width()) / kWeek); };
-    auto Y = [&](int v) { return plot.bottom - static_cast<int>(static_cast<long long>(v) * plot.Height() / ymax); };
+    auto Y = [&](int v) { return data.bottom - static_cast<int>(static_cast<long long>(v) * data.Height() / ymax); };
 
     constexpr int kLineH = 14, kLabelH = 2 * kLineH + 2, kMaxLabelW = 220, kGap = 3;   // 두 줄: 카테고리 / 타이틀
 
@@ -538,7 +557,7 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         const int x = X(inf.ts);
 
         // 변경 시각의 시청자수 (그 시각 이후 첫 샘플)
-        int y = plot.bottom;
+        int y = data.bottom;
         auto it = std::lower_bound(samples_->points.begin(), samples_->points.end(), inf.ts,
                                    [](const sm::Point& p, long long t) { return p.ts < t; });
         if (it != samples_->points.end() && it->ts < t1) y = Y(it->viewers);
@@ -553,7 +572,7 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, long long week_start
         // 각 후보는 기존 라벨·데이터 선·플롯 경계·리더 라인 교차를 모두 피해야 한다.
         CRect box;
         bool found = false;
-        const int band = std::clamp(static_cast<int>((y - plot.top) * 3 / std::max<LONG>(1, plot.Height())), 0, 2);
+        const int band = std::clamp(static_cast<int>((y - data.top) * 3 / std::max<LONG>(1, data.Height())), 0, 2);
         const int stepH = kLabelH + kGap;
         bool strict = true;   // true: 리더 라인이 선을 가로지르는 후보 제외. 방향마다 strict → 완화 순으로 2번 시도
         auto try_cand = [&](int lx, int ly) {
