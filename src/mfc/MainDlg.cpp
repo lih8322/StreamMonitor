@@ -66,7 +66,7 @@ BOOL CMainDlg::OnInitDialog() {
     list_.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
     make_icons();
     mode_.AddString(L"채널 2주 분석");
-    mode_.AddString(L"상위 14 당일");
+    mode_.AddString(L"상위 10 최근 24h");
     mode_.SetCurSel(kModeSingle);
     list_.SetImageList(&icons_, LVSIL_SMALL);
     list_.InsertColumn(0, L"채널", LVCFMT_LEFT, 120);
@@ -290,18 +290,18 @@ void CMainDlg::OnCbnSelchangeMode() {
     hover_idx_ = -1; hover_multi_ = -1;
     if (mode() == kModeMulti) {
         if (multi_ids_.empty()) request_multi();
-        chart_title_.SetWindowTextW(L"상위 14 채널 — 오늘 (00:00 KST 부터)");
+        chart_title_.SetWindowTextW(L"상위 10 채널 — 최근 24시간 (KST)");
     } else if (samples_) {
         OnBnClickedQuery();   // 단일 모드로 돌아오면 선택 채널을 다시 조회
     }
     chart_.Invalidate();
 }
 
-// 리스트(정렬·필터 적용) 앞 kMultiCount 개 채널의 오늘 데이터를 요청한다
+// 리스트(정렬·필터 적용) 앞 kMultiCount 개 채널의 최근 24시간 데이터를 요청한다
 void CMainDlg::request_multi() {
     if (!client_ || !client_->connected()) { status_.SetWindowTextW(L"연결되지 않음"); return; }
     const long long now = static_cast<long long>(std::time(nullptr));
-    day0_ = (now + kKstOffset) / 86400 * 86400 - kKstOffset;   // 오늘 00:00 KST
+    multi_from_ = (now - 86400) / 60 * 60;
     multi_ids_.clear();
     for (int i = 0; i < static_cast<int>(view_.size()) && i < kMultiCount; ++i)
         multi_ids_.emplace_back(channels_[view_[i]].id, channels_[view_[i]].name);
@@ -311,8 +311,8 @@ void CMainDlg::request_multi() {
         for (const auto& [id, name] : multi_ids_) if (id == it->first) { keep = true; break; }
         it = keep ? std::next(it) : multi_.erase(it);
     }
-    for (const auto& [id, name] : multi_ids_) client_->request_samples(id, day0_, now);
-    CString st; st.Format(L"상위 %d 채널 오늘 데이터 조회 중...", static_cast<int>(multi_ids_.size()));
+    for (const auto& [id, name] : multi_ids_) client_->request_samples(id, multi_from_, multi_from_ + 86400);
+    CString st; st.Format(L"상위 %d 채널 24시간 데이터 조회 중...", static_cast<int>(multi_ids_.size()));
     status_.SetWindowTextW(st);
 }
 
@@ -342,13 +342,13 @@ void CMainDlg::OnBnClickedQuery() {
 LRESULT CMainDlg::OnSmSamples(WPARAM, LPARAM lParam) {
     std::unique_ptr<sm::Samples> s(reinterpret_cast<sm::Samples*>(lParam));
     if (!s) return 0;
-    // 상위 14 당일 모드의 응답: 요청 목록에 있는 채널이면 채널별 저장
-    if (s->from == day0_ && day0_ != 0) {
+    // 상위 10 최근 24h 모드의 응답(구간 길이 24h): 요청 목록에 있는 채널이면 채널별 저장
+    if (s->to - s->from == 86400 && multi_from_ != 0) {
         for (const auto& [id, name] : multi_ids_)
             if (id == s->channel_id) {
                 multi_[id] = std::move(s);
                 if (mode() == kModeMulti) {
-                    CString st; st.Format(L"당일 %d/%d 수신  %s", static_cast<int>(multi_.size()), static_cast<int>(multi_ids_.size()),
+                    CString st; st.Format(L"24h %d/%d 수신  %s", static_cast<int>(multi_.size()), static_cast<int>(multi_ids_.size()),
                                           fmt_kst(static_cast<long long>(std::time(nullptr)), L"%H:%M:%S").GetString());
                     status_.SetWindowTextW(st);
                     chart_.Invalidate();
@@ -670,22 +670,23 @@ void CMainDlg::draw_annotations(CDC& dc, const CRect& plot, const CRect& data, l
     dc.SelectObject(oldPen);
 }
 
-// ── 상위 14 당일 모드 ─────────────────────────────────────────────────────
-// 채널당 한 줄. x 축은 오늘 00:00 ~ 24:00 KST 공통, y 축은 줄마다 자기 최고치.
+// ── 상위 10 최근 24h 모드 ─────────────────────────────────────────────────
+// 채널당 한 줄. x 축은 (지금-24h) ~ 지금 공통, y 축은 줄마다 자기 최고치.
 // 왼쪽에 채널명·현재/최고, 선 위에 제목 변경 지점(주황 눈금). 툴팁은 줄 안에서 동작.
 void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
     multi_rows_.clear();
     if (multi_ids_.empty()) {
         dc.SetTextColor(RGB(120, 120, 120));
         CRect r(rc);
-        dc.DrawText(L"조회를 누르면 리스트 상위 14개 채널의 오늘 데이터를 나열합니다", -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        dc.DrawText(L"조회를 누르면 리스트 상위 10개 채널의 최근 24시간 데이터를 나열합니다", -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
     const int n = static_cast<int>(multi_ids_.size());
     const int nameW = 150, rightW = 60, axisH = 18, top = rc.top + 4;
     const int rowH = std::max(24, static_cast<int>(rc.bottom - axisH - top) / n);
     const CRect axis(rc.left + nameW, top, rc.right - rightW, top + rowH * n);
-    auto X = [&](long long ts) { return axis.left + static_cast<int>((ts - day0_) * static_cast<long long>(axis.Width()) / 86400); };
+    const long long t_from = multi_from_, t_to = multi_from_ + 86400;
+    auto X = [&](long long ts) { return axis.left + static_cast<int>((ts - t_from) * static_cast<long long>(axis.Width()) / 86400); };
 
     CPen grid(PS_SOLID, 1, RGB(232, 232, 232));
     CPen sep(PS_SOLID, 1, RGB(210, 210, 210));
@@ -694,18 +695,25 @@ void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
     CPen nowpen(PS_DOT, 1, RGB(150, 150, 150));
     CPen* oldPen = dc.SelectObject(&grid);
 
-    // 시각 격자 + 라벨 (2시간)
+    // 시각 격자 + 라벨: KST 짝수 시 정각마다
     dc.SetTextColor(RGB(90, 90, 90));
-    for (int h = 0; h <= 24; h += 2) {
-        const int x = X(day0_ + h * 3600LL);
+    for (long long t = ((t_from + kKstOffset) / 7200 + 1) * 7200 - kKstOffset; t <= t_to; t += 7200) {
+        const int x = X(t);
         dc.MoveTo(x, axis.top); dc.LineTo(x, axis.bottom);
-        CString s; s.Format(L"%02d", h % 24);
-        dc.DrawText(s, CRect(x - 14, axis.bottom + 2, x + 14, axis.bottom + 16), DT_CENTER | DT_SINGLELINE);
+        dc.DrawText(fmt_kst(t, L"%H"), CRect(x - 14, axis.bottom + 2, x + 14, axis.bottom + 16), DT_CENTER | DT_SINGLELINE);
+    }
+    // 자정 (날짜 경계) 는 진하게 + 날짜 표시
+    dc.SelectObject(&sep);
+    for (long long t = ((t_from + kKstOffset) / 86400 + 1) * 86400 - kKstOffset; t < t_to; t += 86400) {
+        const int x = X(t);
+        dc.MoveTo(x, axis.top); dc.LineTo(x, axis.bottom);
+        if (x + 40 <= axis.right)   // 오른쪽 끝(수치 열)과 겹치면 생략
+            dc.DrawText(fmt_kst(t, L"%m/%d"), CRect(x + 2, axis.top - 2, x + 60, axis.top + 12), DT_LEFT | DT_SINGLELINE);
     }
     // 현재 시각
     const long long now = static_cast<long long>(std::time(nullptr));
     dc.SelectObject(&nowpen);
-    { const int x = X(std::min(now, day0_ + 86400)); dc.MoveTo(x, axis.top); dc.LineTo(x, axis.bottom); }
+    { const int x = X(std::min(now, t_to)); dc.MoveTo(x, axis.top); dc.LineTo(x, axis.bottom); }
 
     for (int i = 0; i < n; ++i) {
         const auto& [id, name] = multi_ids_[i];
@@ -732,10 +740,10 @@ void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
         dc.DrawText(stat, CRect(row.right + 4, row.top, rc.right, row.bottom), DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
         if (!smp || smp->points.empty()) continue;
 
-        // 제목 변경 눈금 (구간 시작 값 제외: ts < day0_)
+        // 제목 변경 눈금 (구간 시작 값 제외: ts < t_from)
         dc.SelectObject(&mark);
         for (const auto& inf : smp->info) {
-            if (inf.ts < day0_) continue;
+            if (inf.ts < t_from) continue;
             const int x = X(inf.ts);
             dc.MoveTo(x, plot.top); dc.LineTo(x, plot.bottom);
         }
@@ -768,7 +776,7 @@ void CMainDlg::draw_multi(CDC& dc, const CRect& rc) {
             const sm::Info* curinf = nullptr;
             for (const auto& inf : smp.info) if (inf.ts <= p.ts) curinf = &inf;
             CString l1, l2;
-            l1.Format(L"%s  %s   %d명", multi_ids_[hover_multi_].second.c_str(), fmt_kst(p.ts, L"%H:%M").GetString(), p.viewers);
+            l1.Format(L"%s  %s   %d명", multi_ids_[hover_multi_].second.c_str(), fmt_kst(p.ts, L"%m/%d %H:%M").GetString(), p.viewers);
             if (curinf) l2.Format(L"%s | %s", curinf->category.c_str(), curinf->title.c_str());
             const CSize s1 = dc.GetTextExtent(l1), s2 = l2.IsEmpty() ? CSize(0, 0) : dc.GetTextExtent(l2);
             const int w = std::min<int>(std::max(s1.cx, s2.cx) + 12, 360), h = s1.cy + s2.cy + 8;
@@ -818,7 +826,7 @@ void CMainDlg::update_hover(CPoint pt) {
             auto it = multi_.find(multi_ids_[mrow].first);
             if (it != multi_.end() && !it->second->points.empty()) {
                 const CRect& plot = multi_rows_[mrow];
-                const long long ts = day0_ + static_cast<long long>(pt.x - plot.left) * 86400 / std::max(1, static_cast<int>(plot.Width()));
+                const long long ts = multi_from_ + static_cast<long long>(pt.x - plot.left) * 86400 / std::max(1, static_cast<int>(plot.Width()));
                 const auto& pts = it->second->points;
                 auto lb = std::lower_bound(pts.begin(), pts.end(), ts, [](const sm::Point& p, long long t) { return p.ts < t; });
                 long long best = LLONG_MAX; int bi = -1;
